@@ -2,7 +2,7 @@
 
 This is a UPnP IGDv1 command line client/lib in python.
 
-All IGDv1 actions are supported.
+Only IGDv1 actions in WANIPConnection service are supported.
 
 Target for developer and protocol testing.
 
