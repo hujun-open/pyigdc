@@ -196,7 +196,6 @@ class IGDClient:
         """
         - intIP is the source address of the request packet, which implies the source interface
         - ctrlURL is the the control URL of IGD server, client will do discovery if it is None
-        - all Getxxx action returns a json string
         """
         self.intIP=intIP #the source addr of the client
         self.ctrlURL=ctrlURL
@@ -264,8 +263,8 @@ class IGDClient:
         resp_xml=sendSOAP(self.pr.netloc,
             'urn:schemas-upnp-org:service:WANIPConnection:1',
             self.ctrlURL,upnp_method,sendArgs)
-        dom=minidom.parseString(resp_xml)
-        return dom.getElementsByTagName('NewExternalIPAddress')[0].firstChild.nodeValue
+        if resp_xml != False:
+            return get1stTagText(resp_xml,["NewExternalIPAddress"])
 
     def GetGenericPortMappingEntry(self,index,hideErr=False):
         upnp_method='GetGenericPortMappingEntry'
@@ -434,7 +433,7 @@ def delPM(args):
 def getExtIP(args):
     igdc=IGDClient(args.source,args.url)
     extip=igdc.GetExternalIP()
-    print extip
+    print json.dumps(extip,indent=4)
 
 def getGPM(args):
     igdc=IGDClient(args.source,args.url)

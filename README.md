@@ -72,7 +72,7 @@ optional arguments:
   -du DURATION, --duration DURATION
                         Duration of the mapping
 ```
-
+all getxxx action's output is in json format
 
 ## Usage as a Library
 from igdc import IGDClient
