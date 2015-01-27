@@ -4,6 +4,8 @@ This is a UPnP IGDv1 command line client/lib in python.
 
 Only IGDv1 actions in WANIPConnection service are supported.
 
+Vendor specific action could be supported via "custom" action.
+
 Target for developer and protocol testing.
 
 ## Installation
@@ -16,14 +18,14 @@ Should be able to run on both Windows and *nix
 
 ```
 python igdc.py -h
-usage: igdc.py [-h] [-d] -s SOURCE [-u URL]
-               {add,del,getextip,getgpm,getspm,getnrss,getwdd,setwdd,getidt,setidt,getadt,setadt,getsi,rt,ft,rc,getct,setct}
+usage: igdc.py [-h] [-d] [-pp] -s SOURCE [-u URL]
+               {add,del,getextip,getgpm,getspm,getnrss,getwdd,setwdd,getidt,setidt,getadt,setadt,getsi,rt,ft,rc,getct,setct,custom}
                ...
 
-UPnP IGD Client by Hu Jun
+UPnP IGDv1 Client by Hu Jun
 
 positional arguments:
-  {add,del,getextip,getgpm,getspm,getnrss,getwdd,setwdd,getidt,setidt,getadt,setadt,getsi,rt,ft,rc,getct,setct}
+  {add,del,getextip,getgpm,getspm,getnrss,getwdd,setwdd,getidt,setidt,getadt,setadt,getsi,rt,ft,rc,getct,setct,custom}
     add                 add port mapping
     del                 del port mapping
     getextip            get external IP
@@ -42,10 +44,12 @@ positional arguments:
     rc                  request connection
     getct               get connection type info
     setct               set connection type
+    custom              use custom action
 
 optional arguments:
   -h, --help            show this help message and exit
   -d, --DEBUG           enable DEBUG output
+  -pp, --pretty_print   enable xml pretty output for debug and custom action
   -s SOURCE, --source SOURCE
                         source address of requests
   -u URL, --url URL     control URL
@@ -73,6 +77,50 @@ optional arguments:
                         Duration of the mapping
 ```
 all getxxx action's output is in json format
+
+## Use Custom Action
+```
+python igdc.py custom -h
+usage: igdc.py custom [-h] [-iargs INPUT_ARGS] method_name
+
+positional arguments:
+  method_name           name of custom action
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -iargs INPUT_ARGS, --input_args INPUT_ARGS
+                        input args, the format is same as python dict,e.g.
+                        '{"NewPortMappingIndex": [0, "ui4"]}'
+```
+method_name is the name of the action defined in the IGD service description XML.
+
+-iargs specify a list of input arguments to the action,the format  is same as python dict:
+*  key is the argument name
+*  value is a two element list, 1st one is the value of arguement, 2nd one is the UPnP data type defined in the service description XML
+
+The ouput of this action is the responed XML from the server.
+
+An example to use custom action achieve action:GetGenericPortMappingEntry
+```
+python igdc.py -pp -s 40.0.0.100 custom GetGenericPortMappingEntry -iargs '{"NewPortMappingIndex": [0, "ui4"]}'
+<?xml version="1.0" ?>
+<s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+	<s:Body>
+		<u:GetGenericPortMappingEntryResponse xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1">
+			<NewRemoteHost/>
+			<NewExternalPort>2100</NewExternalPort>
+			<NewProtocol>TCP</NewProtocol>
+			<NewInternalPort>2100</NewInternalPort>
+			<NewInternalClient>40.0.0.100</NewInternalClient>
+			<NewEnabled>1</NewEnabled>
+			<NewPortMappingDescription/>
+			<NewLeaseDuration>0</NewLeaseDuration>
+		</u:GetGenericPortMappingEntryResponse>
+	</s:Body>
+</s:Envelope>
+```
+
+
 
 ## Usage as a Library
 from igdc import IGDClient
