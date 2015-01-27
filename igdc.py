@@ -24,6 +24,7 @@ import re
 import json
 
 DEBUG=False
+PPRINTXML=False
 
 def str2bool(bstr):
     return bool(int(bstr))
@@ -88,7 +89,7 @@ def get1stTagText(xmls,tagname_list):
 
 #sendSOAP is based on part of source code from miranda-upnp.
 def sendSOAP(hostName,serviceType,controlURL,actionName,actionArguments,hideErr=False):
-        global DEBUG
+        global DEBUG,PPRINTXML
         argList = ''
         soapResponse = ''
 
@@ -120,13 +121,13 @@ def sendSOAP(hostName,serviceType,controlURL,actionName,actionArguments,hideErr=
                 argList += '<%s>%s</%s>' % (arg,val,arg)
 
         #Create the SOAP request
-        soapBody =      '<?xml version="1.0"?>\n'\
-                        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope" SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">\n'\
-                        '<SOAP-ENV:Body>\n'\
-                        '\t<m:%s xmlns:m="%s">\n'\
-                        '%s\n'\
-                        '\t</m:%s>\n'\
-                        '</SOAP-ENV:Body>\n'\
+        soapBody =      '<?xml version="1.0"?>'\
+                        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope" SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'\
+                        '<SOAP-ENV:Body>'\
+                        '<m:%s xmlns:m="%s">'\
+                        '%s'\
+                        '</m:%s>'\
+                        '</SOAP-ENV:Body>'\
                         '</SOAP-ENV:Envelope>' % (actionName,serviceType,argList,actionName)
 
         #Specify the headers to send with the request
@@ -144,8 +145,15 @@ def sendSOAP(hostName,serviceType,controlURL,actionName,actionArguments,hideErr=
 
         if DEBUG:
             print "Action: ---------- tx request -----------"
-            print soapRequest
+            if not PPRINTXML:
+                print soapRequest
+            else:
+                print headers
+                xml = minidom.parseString(soapBody)
+                print xml.toprettyxml()
             print "Action: -------- end of tx request ------"
+
+
         #Send data and go into recieve loop
         try:
                 sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
@@ -165,7 +173,11 @@ def sendSOAP(hostName,serviceType,controlURL,actionName,actionArguments,hideErr=
                     print "Action: --------rx http response header----------"
                     print header
                     print "Action: -------- rx http response body----------"
-                    print body
+                    if not PPRINTXML:
+                        print body
+                    else:
+                        xml = minidom.parseString(body)
+                        print xml.toprettyxml()
                     print "Action: --------end of rx http response body  -----"
                 if not header.upper().startswith('HTTP/1.') or not ' 200 ' in header.split('\r\n')[0]:
                     err_code,err_desc=parseErrMsg(body)
@@ -419,6 +431,26 @@ class IGDClient:
             self.ctrlURL,upnp_method,sendArgs)
 
 
+    def customAction(self,method_name,in_args={}):
+        """
+        this is for the vendor specific action
+        in_args is a dict,
+        the format is :
+            key is the argument name
+            value is a two element list, 1st one is the value of arguement, 2nd
+            is the UPnP data type defined in the spec. following is an example:
+            {'NewPortMappingIndex': [0, 'ui4'],}
+
+        """
+        upnp_method=method_name
+        sendArgs=dict(in_args)
+        resp_xml=sendSOAP(self.pr.netloc,
+            'urn:schemas-upnp-org:service:WANIPConnection:1',
+            self.ctrlURL,upnp_method,sendArgs)
+        return resp_xml
+
+
+
 
 def addPM(args):
     igdc=IGDClient(args.source,args.url)
@@ -516,11 +548,24 @@ def setCT(args):
     igdc=IGDClient(args.source,args.url)
     igdc.SetConnectionType(args.ct_type)
 
+def custom(args):
+    global PPRINTXML
+    igdc=IGDClient(args.source,args.url)
+    iargs=json.loads(args.input_args)
+    resp_xml=igdc.customAction(args.method_name,iargs)
+    if PPRINTXML:
+        xml = minidom.parseString(resp_xml)
+        print xml.toprettyxml()
+    else:
+        print resp_xml
+
 def main():
-    global DEBUG
+    global DEBUG,PPRINTXML
     parser = argparse.ArgumentParser(description="UPnP IGDv1 Client by Hu Jun")
     parser.add_argument("-d","--DEBUG",action='store_true',
                         help="enable DEBUG output")
+    parser.add_argument("-pp","--pretty_print",action='store_true',
+                        help="enable xml pretty output for debug and custom action")
     parser.add_argument("-s","--source",required=True,
                         help="source address of requests")
     parser.add_argument("-u","--url",
@@ -625,8 +670,17 @@ def main():
                         help="connection type")
     parser_sct.set_defaults(func=setCT)
 
+    parser_cust = subparsers.add_parser('custom',help='use custom action')
+    parser_cust.add_argument("method_name",
+                        help="name of custom action")
+    parser_cust.add_argument("-iargs","--input_args",default="{}",
+                        help="input args, the format is same as python dict,"\
+                         "e.g. '{\"NewPortMappingIndex\": [0, \"ui4\"]}'")
+    parser_cust.set_defaults(func=custom)
+
     args=parser.parse_args()
     DEBUG=args.DEBUG
+    PPRINTXML=args.pretty_print
     args.func(args)
 if __name__ == '__main__':
     main()
