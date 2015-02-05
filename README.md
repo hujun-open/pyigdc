@@ -10,7 +10,7 @@ Target for developer and protocol testing.
 
 ## Installation
 
-Require python 2.6 or later (python3 is not supported)
+Require python 2.7 (python3 is not supported)
 
 Should be able to run on both Windows and *nix
 
