@@ -4,8 +4,8 @@ This is a UPnP IGD command line client/lib in python.
 Support following services:
 
 * WANIPConnection v1
-  * Vendor specific action could be supported via "custom" action.
 * WANIPv6FirewallControl v1
+* Vendor specific action could be supported via "custom" action
 
 
 
@@ -25,7 +25,7 @@ usage: igdc.py [-h] [-d] [-pp] -s SOURCE [-u URL]
                {add,del,getextip,getgpm,getspm,getnrss,getwdd,setwdd,getidt,setidt,getadt,setadt,getsi,rt,ft,rc,getct,setct,custom,getfwstatus,addph,getopht,updateph,delph,getphpkts,chkph}
                ...
 
-UPnP IGD Client by Hu Jun Implements WANIPConnection and
+UPnP IGD Client by Hu Jun; Implements WANIPConnection and
 WANIPv6FirewallControl Services
 
 positional arguments:
@@ -65,7 +65,6 @@ optional arguments:
   -s SOURCE, --source SOURCE
                         source address of requests
   -u URL, --url URL     control URL
-
 ```
 add -h after each action to see help for the specific action:
 ```
@@ -91,16 +90,20 @@ optional arguments:
 ```
 all getxxx action's output is in json format
 
-## Use Custom Action for WANIPConnection
+## Use Custom Action
 ```
 python igdc.py custom -h
-usage: igdc.py custom [-h] [-iargs INPUT_ARGS] method_name
+usage: igdc.py custom [-h] [-svc {WANIPConnection,WANIPv6FirewallControl}]
+                      [-iargs INPUT_ARGS]
+                      method_name
 
 positional arguments:
   method_name           name of custom action
 
 optional arguments:
   -h, --help            show this help message and exit
+  -svc {WANIPConnection,WANIPv6FirewallControl}
+                        IGD service, default is WANIPConnection
   -iargs INPUT_ARGS, --input_args INPUT_ARGS
                         input args, the format is same as python dict,e.g.
                         '{"NewPortMappingIndex": [0, "ui4"]}'

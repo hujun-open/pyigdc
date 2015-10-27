@@ -25,6 +25,83 @@ from xml.dom import minidom
 from urlparse import urlparse
 import re
 import json
+import ctypes
+import os
+
+class sockaddr(ctypes.Structure):
+    _fields_ = [("sa_family", ctypes.c_short),
+                ("__pad1", ctypes.c_ushort),
+                ("ipv4_addr", ctypes.c_byte * 4),
+                ("ipv6_addr", ctypes.c_byte * 16),
+                ("__pad2", ctypes.c_ulong)]
+
+if hasattr(ctypes, 'windll'):
+    WSAStringToAddressA = ctypes.windll.ws2_32.WSAStringToAddressA
+    WSAAddressToStringA = ctypes.windll.ws2_32.WSAAddressToStringA
+else:
+    def not_windows():
+        raise SystemError(
+            "Invalid platform. ctypes.windll must be available."
+        )
+    WSAStringToAddressA = not_windows
+    WSAAddressToStringA = not_windows
+
+
+def inet_pton(address_family, ip_string):
+    addr = sockaddr()
+    addr.sa_family = address_family
+    addr_size = ctypes.c_int(ctypes.sizeof(addr))
+
+    if WSAStringToAddressA(
+            ip_string,
+            address_family,
+            None,
+            ctypes.byref(addr),
+            ctypes.byref(addr_size)
+    ) != 0:
+        raise socket.error(ctypes.FormatError())
+
+    if address_family == socket.AF_INET:
+        return ctypes.string_at(addr.ipv4_addr, 4)
+    if address_family == socket.AF_INET6:
+        return ctypes.string_at(addr.ipv6_addr, 16)
+
+    raise socket.error('unknown address family')
+
+
+def inet_ntop(address_family, packed_ip):
+    addr = sockaddr()
+    addr.sa_family = address_family
+    addr_size = ctypes.c_int(ctypes.sizeof(addr))
+    ip_string = ctypes.create_string_buffer(128)
+    ip_string_size = ctypes.c_int(ctypes.sizeof(ip_string))
+
+    if address_family == socket.AF_INET:
+        if len(packed_ip) != ctypes.sizeof(addr.ipv4_addr):
+            raise socket.error('packed IP wrong length for inet_ntoa')
+        ctypes.memmove(addr.ipv4_addr, packed_ip, 4)
+    elif address_family == socket.AF_INET6:
+        if len(packed_ip) != ctypes.sizeof(addr.ipv6_addr):
+            raise socket.error('packed IP wrong length for inet_ntoa')
+        ctypes.memmove(addr.ipv6_addr, packed_ip, 16)
+    else:
+        raise socket.error('unknown address family')
+
+    if WSAAddressToStringA(
+            ctypes.byref(addr),
+            addr_size,
+            None,
+            ip_string,
+            ctypes.byref(ip_string_size)
+    ) != 0:
+        raise socket.error(ctypes.FormatError())
+
+    return ip_string[:ip_string_size.value - 1]
+
+# Adding our two functions to the socket library
+if os.name == 'nt':
+    socket.inet_pton = inet_pton
+    socket.inet_ntop = inet_ntop
 
 
 def str2bool(bstr):
@@ -206,8 +283,8 @@ class IGDClient:
             sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
             #sock.setsockopt(socket.IPPROTO_IP, socket.IPV6_MULTICAST_HOPS, 2)
             if self.debug:print "trying to bind to address:",self.intIP
-            sockaddr=socket.getaddrinfo(self.intIP,19110)[-1:][0][-1:][0]
-            sock.bind(sockaddr)
+            socketaddr=socket.getaddrinfo(self.intIP,19110)[-1:][0][-1:][0]
+            sock.bind(socketaddr)
 
 
             sock.sendto(up_disc, (dst_ip, 1900))
@@ -226,11 +303,11 @@ class IGDClient:
         for e in dom.getElementsByTagName('service'):
             stn=e.getElementsByTagName('serviceType')
             if self.igdsvc=="WANIPC":
-                target_svctype='urn:schemas-upnp-org:service:WANIPConnection:1'
+                target_svctype='urn:schemas-upnp-org:service:WANIPConnection'
             else:
-                target_svctype='urn:schemas-upnp-org:service:WANIPv6FirewallControl:1'
+                target_svctype='urn:schemas-upnp-org:service:WANIPv6FirewallControl'
             if stn != []:
-                if stn[0].firstChild.nodeValue.strip() == target_svctype:
+                if stn[0].firstChild.nodeValue.strip()[0:-2] == target_svctype:
                     cun=e.getElementsByTagName('controlURL')
                     self.ctrlURL=baseURL+cun[0].firstChild.nodeValue
                     break
@@ -429,10 +506,11 @@ class IGDClient:
             self.ctrlURL,upnp_method,sendArgs)
 
 
-    def customAction(self,method_name,in_args={}):
+    def customAction(self,method_name,in_args={},svc="WANIPConnection"):
         """
         this is for the vendor specific action
         in_args is a dict,
+        svc is the IGD service,
         the format is :
             key is the argument name
             value is a two element list, 1st one is the value of arguement, 2nd
@@ -443,7 +521,7 @@ class IGDClient:
         upnp_method=method_name
         sendArgs=dict(in_args)
         resp_xml=self.sendSOAP(self.pr.netloc,
-            'urn:schemas-upnp-org:service:WANIPConnection:1',
+            'urn:schemas-upnp-org:service:{svc}:1'.format(svc=svc),
             self.ctrlURL,upnp_method,sendArgs)
         return resp_xml
 
@@ -798,7 +876,7 @@ class IGDCMDClient:
     def custom(self,args):
         print args.input_args
         iargs=json.loads(args.input_args)
-        resp_xml=self.igdc.customAction(args.method_name,iargs)
+        resp_xml=self.igdc.customAction(args.method_name,iargs,args.svc)
         if self.igdc.pprint:
             xml = minidom.parseString(resp_xml)
             print xml.toprettyxml()
@@ -954,6 +1032,10 @@ def main():
     parser_cust = subparsers.add_parser('custom',help='use custom action')
     parser_cust.add_argument("method_name",
                         help="name of custom action")
+    parser_cust.add_argument("-svc",type=str,
+                        choices=['WANIPConnection','WANIPv6FirewallControl'],
+                        default="WANIPConnection",
+                        help="IGD service, default is WANIPConnection")
     parser_cust.add_argument("-iargs","--input_args",default="{}",
                         help="input args, the format is same as python dict,"\
                          "e.g. '{\"NewPortMappingIndex\": [0, \"ui4\"]}'")
