@@ -2,14 +2,16 @@
 
 
 #-------------------------------------------------------------------------------
-# Name:        A UPNP IGD v1 Client
+# Name:        A UPNP IGD Client, implements following services:
+#               - WANIPConnection
+#               - WANIPv6FirewallControl
 # Desc:        Could be used as CLI client or a client lib. to use it as lib,
 #              use class IGDClient
 #              require python 2.6+, python3 is not supported
 #
 # Author:      Hu Jun
 #
-# Created:     1/27/2015
+# Created:     10/26/2015
 # Copyright:   (c) Hu Jun 2015
 # Licence:     MIT
 #-------------------------------------------------------------------------------
@@ -28,6 +30,46 @@ import json
 def str2bool(bstr):
     return bool(int(bstr))
 
+def getProtoId(proto_name):
+    if proto_name=="UDP":
+        return 17
+    if proto_name=="TCP":
+        return 6
+    if proto_name=="SCTP":
+        return 132
+    if proto_name=="ALL":
+        return 65535
+    if isinstance(proto_name,int):
+        if proto_name>0 and proto_name<=65535:
+            return proto_name
+    return False
+
+
+
+def isv6(addr):
+    if addr.find(":")!=-1:
+        return True
+    else:
+        if addr.count(".")>3:
+            return True
+        else:
+            return False
+
+def isLLA(addr):
+    """return True if addr is IPv6 Link Local Address"""
+    if isv6(addr)==False:
+        return False
+    if "%" in addr:
+        addr=addr.split("%")[0]
+    bina=socket.inet_pton(socket.AF_INET6,addr)
+    if bina[0:8]=="\xfe\x80\x00\x00\x00\x00\x00\x00":
+        return True
+    else:
+        return False
+
+
+
+
 UPNPTYPEDICT={
 "NewUptime":int,
 "NewAutoDisconnectTime":int,
@@ -40,6 +82,13 @@ UPNPTYPEDICT={
 "NewRSIPAvailable":str2bool,
 "NewNATEnabled":str2bool,
 "NewEnabled":str2bool,
+"FirewallEnabled":str2bool,
+"InboundPinholeAllowed":str2bool,
+"OutboundPinholeTimeout":int,
+"UniqueID":int,
+"PinholePackets":int,
+"IsWorking":str2bool,
+
 }
 
 class UPNPError(Exception):
@@ -108,15 +157,19 @@ class IGDClient:
     """
     UPnP IGD v1 Client class, supports all actions
     """
-    def __init__(self, intIP,ctrlURL=None):
+    def __init__(self, intIP,ctrlURL=None,service="WANIPC",edebug=False,pprint=False):
         """
         - intIP is the source address of the request packet, which implies the source interface
         - ctrlURL is the the control URL of IGD server, client will do discovery if it is None
         """
-        self.debug=False
-        self.pprint=False
+        self.debug=edebug
+        self.pprint=pprint
         self.intIP=intIP #the source addr of the client
         self.ctrlURL=ctrlURL
+        if isv6(intIP):
+            self.igdsvc="IP6FWCTL"
+        else:
+            self.igdsvc="WANIPC"
         if self.ctrlURL == None:
             self.discovery()
 
@@ -138,11 +191,27 @@ class IGDClient:
         """
         Find IGD device and its control URL via UPnP multicast discovery
         """
-        up_disc='M-SEARCH * HTTP/1.1\r\nHOST:239.255.255.250:1900\r\nST:upnp:rootdevice\r\nMX:2\r\nMAN:"ssdp:discover"\r\n\r\n'
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
-        sock.bind((self.intIP,19110))
-        sock.sendto(up_disc, ("239.255.255.250", 1900))
+        if not isv6(self.intIP):
+            up_disc='M-SEARCH * HTTP/1.1\r\nHOST:239.255.255.250:1900\r\nST:upnp:rootdevice\r\nMX:2\r\nMAN:"ssdp:discover"\r\n\r\n'
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+            sock.bind((self.intIP,19110))
+            sock.sendto(up_disc, ("239.255.255.250", 1900))
+        else:
+            if isLLA(self.intIP):
+                dst_ip="ff02::c"
+            else:
+                dst_ip="ff05::c"
+            up_disc='M-SEARCH * HTTP/1.1\r\nHOST:[{dst}]:1900\r\nST:upnp:rootdevice\r\nMX:2\r\nMAN:"ssdp:discover"\r\n\r\n'.format(dst=dst_ip)
+            sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            #sock.setsockopt(socket.IPPROTO_IP, socket.IPV6_MULTICAST_HOPS, 2)
+            if self.debug:print "trying to bind to address:",self.intIP
+            sockaddr=socket.getaddrinfo(self.intIP,19110)[-1:][0][-1:][0]
+            sock.bind(sockaddr)
+
+
+            sock.sendto(up_disc, (dst_ip, 1900))
+
         if self.debug:print "Discovery: ----- tx request -----\n "+up_disc
         sock.settimeout(10.0)
         data, addr = sock.recvfrom(1024) # buffer size is 1024 bytes
@@ -156,11 +225,19 @@ class IGDClient:
         dom=minidom.parseString(descXMLs)
         for e in dom.getElementsByTagName('service'):
             stn=e.getElementsByTagName('serviceType')
+            if self.igdsvc=="WANIPC":
+                target_svctype='urn:schemas-upnp-org:service:WANIPConnection:1'
+            else:
+                target_svctype='urn:schemas-upnp-org:service:WANIPv6FirewallControl:1'
             if stn != []:
-                if stn[0].firstChild.nodeValue == 'urn:schemas-upnp-org:service:WANIPConnection:1':
+                if stn[0].firstChild.nodeValue.strip() == target_svctype:
                     cun=e.getElementsByTagName('controlURL')
                     self.ctrlURL=baseURL+cun[0].firstChild.nodeValue
                     break
+        if self.debug: print "control URL is ",self.ctrlURL
+
+
+
 
 
     def AddPortMapping(self,intIP,extPort,proto,intPort,enabled=1,duration=0,
@@ -392,13 +469,22 @@ class IGDClient:
 
         #Check if a port number was specified in the host name; default is port 80
         if ':' in hostName:
-                hostNameArray = hostName.split(':')
-                host = hostNameArray[0]
-                try:
-                        port = int(hostNameArray[1])
-                except:
-                        print 'Invalid port specified for host connection:',hostName[1]
-                        return False
+                if not "]" in hostName:
+                    hostNameArray = hostName.split(':')
+                    host = hostNameArray[0]
+                    try:
+                            port = int(hostNameArray[1])
+                    except:
+                            print 'Invalid port specified for host connection:',hostName[1]
+                            return False
+                else:
+                    hostNameArray = hostName.split(']')
+                    host = hostNameArray[0][1:]
+                    try:
+                            port = int(hostNameArray[1][1:])
+                    except:
+                            print 'Invalid port specified for host connection:',hostName[1]
+                            return False
         else:
                 host = hostName
                 port = 80
@@ -442,18 +528,32 @@ class IGDClient:
 
 
         #Send data and go into recieve loop
-
-        sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        if not isv6(self.intIP):
+            sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        else:
+            sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        sock.settimeout(10)
         sock.connect((host,port))
         sock.send(soapRequest)
-        while True:
-                data = sock.recv(8192)
-                if not data:
-                        break
-                else:
-                        soapResponse += data
-                        if re.compile('<\/.*:envelope>').search(soapResponse.lower()) != None:
-                                break
+        data = sock.recv(8192)
+        if not data:
+            print "No response!"
+            return
+        else:
+            soapResponse += data
+##            if re.compile('<\/.*:envelope>').search(soapResponse.lower()) != None:
+##                print "Invalid Response"
+##                print data
+##                return
+
+##        while True:
+##                data = sock.recv(8192)
+##                if not data:
+##                        break
+##                else:
+##                        soapResponse += data
+##                        if re.compile('<\/.*:envelope>').search(soapResponse.lower()) != None:
+##                                break
         sock.close()
         (header,body) = soapResponse.split('\r\n\r\n',1)
         if self.debug == True:
@@ -484,6 +584,102 @@ class IGDClient:
 ##
 ##
 
+    #following are for IP6FWControl
+    def GetFWStatus(self):
+        upnp_method='GetFirewallStatus'
+        sendArgs={}
+        resp_xml=self.sendSOAP(self.pr.netloc,
+            'urn:schemas-upnp-org:service:WANIPv6FirewallControl:1',
+            self.ctrlURL,upnp_method,sendArgs)
+        if resp_xml != False:
+            return get1stTagText(resp_xml,[
+                                "FirewallEnabled","InboundPinholeAllowed"])
+
+    def AddPinhole(self,iclient,rhost="",rport=0,iport=0,proto=65535,leasetime=3600):
+        upnp_method="AddPinhole"
+        pid=getProtoId(proto)
+        if pid==False:
+            print proto, " is not a supported protocol"
+            return
+        sendArgs={
+        "RemoteHost": (rhost,'string'),
+        "RemotePort":(rport,'ui2'),
+        "InternalClient": (iclient,'string'),
+        "InternalPort":(iport,'ui2'),
+        "Protocol":(pid,'ui2'),
+        "LeaseTime":(leasetime,'ui4'),
+        }
+        resp_xml=self.sendSOAP(self.pr.netloc,
+                'urn:schemas-upnp-org:service:WANIPv6FirewallControl:1',
+                self.ctrlURL,upnp_method,sendArgs)
+        if resp_xml != False:
+            return get1stTagText(resp_xml,[
+                                "UniqueID",])
+
+    def GetPinholeTimeout(self,iclient="",rhost="",rport=0,iport=0,proto=65535):
+        upnp_method="GetOutboundPinholeTimeout"
+        pid=getProtoId(proto)
+        if pid==False:
+            print proto, " is not a supported protocol"
+            return
+        sendArgs={
+        "RemoteHost": (rhost,'string'),
+        "RemotePort":(rport,'ui2'),
+        "InternalClient": (iclient,'string'),
+        "InternalPort":(iport,'ui2'),
+        "Protocol":(pid,'ui2'),
+        }
+        resp_xml=self.sendSOAP(self.pr.netloc,
+                'urn:schemas-upnp-org:service:WANIPv6FirewallControl:1',
+                self.ctrlURL,upnp_method,sendArgs)
+        if resp_xml != False:
+            return get1stTagText(resp_xml,[
+                                "OutboundPinholeTimeout",])
+
+    def UpdatePinhole(self,uid,lease):
+        upnp_method="UpdatePinhole"
+        sendArgs={
+        "UniqueID": (uid,'ui2'),
+        "NewLeaseTime":(lease,'ui4'),
+        }
+        resp_xml=self.sendSOAP(self.pr.netloc,
+                'urn:schemas-upnp-org:service:WANIPv6FirewallControl:1',
+                self.ctrlURL,upnp_method,sendArgs)
+
+
+    def DelPinhole(self,uid):
+        upnp_method="DeletePinhole"
+        sendArgs={
+        "UniqueID": (uid,'ui2'),
+        }
+        resp_xml=self.sendSOAP(self.pr.netloc,
+                'urn:schemas-upnp-org:service:WANIPv6FirewallControl:1',
+                self.ctrlURL,upnp_method,sendArgs)
+
+
+    def GetPinholePkts(self,uid):
+        upnp_method="GetPinholePackets"
+        sendArgs={
+        "UniqueID": (uid,'ui2'),
+        }
+        resp_xml=self.sendSOAP(self.pr.netloc,
+                'urn:schemas-upnp-org:service:WANIPv6FirewallControl:1',
+                self.ctrlURL,upnp_method,sendArgs)
+        if resp_xml != False:
+            return get1stTagText(resp_xml,[
+                                "PinholePackets",])
+
+    def CheckPinhole(self,uid):
+        upnp_method="CheckPinholeWorking"
+        sendArgs={
+        "UniqueID": (uid,'ui2'),
+        }
+        resp_xml=self.sendSOAP(self.pr.netloc,
+                'urn:schemas-upnp-org:service:WANIPv6FirewallControl:1',
+                self.ctrlURL,upnp_method,sendArgs)
+        if resp_xml != False:
+            return get1stTagText(resp_xml,[
+                                "IsWorking",])
 
 class IGDCMDClient:
     def __init__(self):
@@ -493,7 +689,10 @@ class IGDCMDClient:
         """
         initiate the IGDClient
         """
-        self.igdc=IGDClient(args.source,args.url)
+
+        self.igdc=IGDClient(args.source,args.url,args.DEBUG,args.pretty_print)
+
+
 
     def addPM(self,args):
         self.igdc.AddPortMapping(args.intIP, args.extPort,
@@ -606,18 +805,51 @@ class IGDCMDClient:
         else:
             print resp_xml
 
+
+    #following are for IPv6FWControl
+    def getFWStatus(self,args):
+        pm=self.igdc.GetFWStatus()
+        print json.dumps(pm,indent=4)
+
+    def addPH(self,args):
+        r=self.igdc.AddPinhole(args.intIP,args.rIP,args.rPort,args.intPort,args.proto,args.lease)
+        print json.dumps(r,indent=4)
+
+
+    def getOPHT(self,args):
+        r=self.igdc.GetPinholeTimeout(args.intIP,args.rIP,args.rPort,args.intPort,args.proto)
+        print json.dumps(r,indent=4)
+
+    def updatePH(self,args):
+        self.igdc.UpdatePinhole(args.uid,args.lease)
+
+    def delPH(self,args):
+        self.igdc.DelPinhole(args.uid)
+
+
+    def getPHPkts(self,args):
+        r=self.igdc.GetPinholePkts(args.uid)
+        print json.dumps(r,indent=4)
+
+    def chkPH(self,args):
+        r=self.igdc.CheckPinhole(args.uid)
+        print json.dumps(r,indent=4)
+
 def main():
     cli=IGDCMDClient()
-    parser = argparse.ArgumentParser(description="UPnP IGDv1 Client by Hu Jun")
+    parser = argparse.ArgumentParser(description="UPnP IGD Client by Hu Jun; Implements WANIPConnection and WANIPv6FirewallControl Services")
     parser.add_argument("-d","--DEBUG",action='store_true',
                         help="enable DEBUG output")
+
     parser.add_argument("-pp","--pretty_print",action='store_true',
                         help="enable xml pretty output for debug and custom action")
     parser.add_argument("-s","--source",required=True,
                         help="source address of requests")
     parser.add_argument("-u","--url",
                         help="control URL")
+
     subparsers = parser.add_subparsers()
+
     parser_start = subparsers.add_parser('add',help='add port mapping')
     parser_start.add_argument("intIP",
                         help="Internal IP")
@@ -636,6 +868,8 @@ def main():
     parser_start.add_argument("-du","--duration",type=int,default=0,
                         help="Duration of the mapping")
     parser_start.set_defaults(func=cli.addPM)
+
+
 
 
     parser_del = subparsers.add_parser('del',help='del port mapping')
@@ -724,6 +958,63 @@ def main():
                         help="input args, the format is same as python dict,"\
                          "e.g. '{\"NewPortMappingIndex\": [0, \"ui4\"]}'")
     parser_cust.set_defaults(func=cli.custom)
+
+
+    #following for IPv6FWControl
+    parser_gfwstatus = subparsers.add_parser('getfwstatus',help='get IPv6 FW status')
+    parser_gfwstatus.set_defaults(func=cli.getFWStatus)
+
+    parser_addph = subparsers.add_parser('addph',help='add IPv6 FW Pinhole')
+    parser_addph.add_argument("intIP",
+                        help="Internal IP")
+    parser_addph.add_argument("-intPort",type=int,default=0,
+                        help="Internal Port")
+    parser_addph.add_argument("proto",choices=['UDP', 'TCP','ALL'],
+                        help="Protocol")
+    parser_addph.add_argument("-rIP",default="",
+                        help="Remote IP")
+    parser_addph.add_argument("-rPort",type=int,default=0,
+                        help="Remote Port")
+
+    parser_addph.add_argument("-lease",type=int,default=3600,
+                        help="leasetime of the pinhole")
+    parser_addph.set_defaults(func=cli.addPH)
+
+
+    parser_gopht = subparsers.add_parser('getopht',help='get IPv6 FW OutboundPinholeTimeout')
+    parser_gopht.add_argument("-intIP",type=str,default="",
+                        help="Internal IP")
+    parser_gopht.add_argument("-intPort",type=int,default=0,
+                        help="Internal Port")
+    parser_gopht.add_argument("-proto",choices=['UDP', 'TCP','ALL'],default='ALL',
+                        help="Protocol")
+    parser_gopht.add_argument("-rIP",default="",
+                        help="Remote IP")
+    parser_gopht.add_argument("-rPort",type=int,default=0,
+                        help="Remote Port")
+    parser_gopht.set_defaults(func=cli.getOPHT)
+
+
+    parser_uph = subparsers.add_parser('updateph',help='update IPv6 FW pinhole')
+    parser_uph.add_argument("uid",type=int,help="UniqueID of the pinhole")
+    parser_uph.add_argument("lease",type=int,
+                        help="new leasetime of the pinhole")
+    parser_uph.set_defaults(func=cli.updatePH)
+
+
+    parser_dph = subparsers.add_parser('delph',help='delete IPv6 FW pinhole')
+    parser_dph.add_argument("uid",type=int,help="UniqueID of the pinhole")
+    parser_dph.set_defaults(func=cli.delPH)
+
+
+    parser_gphpkts = subparsers.add_parser('getphpkts',help='get number of packets go through specified IPv6FW pinhole')
+    parser_gphpkts.add_argument("uid",type=int,help="UniqueID of the pinhole")
+    parser_gphpkts.set_defaults(func=cli.getPHPkts)
+
+
+    parser_chkph = subparsers.add_parser('chkph',help='check if the specified pinhole is working')
+    parser_chkph.add_argument("uid",type=int,help="UniqueID of the pinhole")
+    parser_chkph.set_defaults(func=cli.chkPH)
 
     args=parser.parse_args()
     cli.init(args)

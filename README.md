@@ -1,10 +1,13 @@
 # pyigdc
 
-This is a UPnP IGDv1 command line client/lib in python.
+This is a UPnP IGD command line client/lib in python.
+Support following services:
 
-Only IGDv1 actions in WANIPConnection service are supported.
+* WANIPConnection v1
+  * Vendor specific action could be supported via "custom" action.
+* WANIPv6FirewallControl v1
 
-Vendor specific action could be supported via "custom" action.
+
 
 Target for developer and protocol testing.
 
@@ -19,13 +22,14 @@ Should be able to run on both Windows and *nix
 ```
 python igdc.py -h
 usage: igdc.py [-h] [-d] [-pp] -s SOURCE [-u URL]
-               {add,del,getextip,getgpm,getspm,getnrss,getwdd,setwdd,getidt,setidt,getadt,setadt,getsi,rt,ft,rc,getct,setct,custom}
+               {add,del,getextip,getgpm,getspm,getnrss,getwdd,setwdd,getidt,setidt,getadt,setadt,getsi,rt,ft,rc,getct,setct,custom,getfwstatus,addph,getopht,updateph,delph,getphpkts,chkph}
                ...
 
-UPnP IGDv1 Client by Hu Jun
+UPnP IGD Client by Hu Jun Implements WANIPConnection and
+WANIPv6FirewallControl Services
 
 positional arguments:
-  {add,del,getextip,getgpm,getspm,getnrss,getwdd,setwdd,getidt,setidt,getadt,setadt,getsi,rt,ft,rc,getct,setct,custom}
+  {add,del,getextip,getgpm,getspm,getnrss,getwdd,setwdd,getidt,setidt,getadt,setadt,getsi,rt,ft,rc,getct,setct,custom,getfwstatus,addph,getopht,updateph,delph,getphpkts,chkph}
     add                 add port mapping
     del                 del port mapping
     getextip            get external IP
@@ -45,6 +49,14 @@ positional arguments:
     getct               get connection type info
     setct               set connection type
     custom              use custom action
+    getfwstatus         get IPv6 FW status
+    addph               add IPv6 FW Pinhole
+    getopht             get IPv6 FW OutboundPinholeTimeout
+    updateph            update IPv6 FW pinhole
+    delph               delete IPv6 FW pinhole
+    getphpkts           get number of packets go through specified IPv6FW
+                        pinhole
+    chkph               check if the specified pinhole is working
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -53,6 +65,7 @@ optional arguments:
   -s SOURCE, --source SOURCE
                         source address of requests
   -u URL, --url URL     control URL
+
 ```
 add -h after each action to see help for the specific action:
 ```
@@ -78,7 +91,7 @@ optional arguments:
 ```
 all getxxx action's output is in json format
 
-## Use Custom Action
+## Use Custom Action for WANIPConnection
 ```
 python igdc.py custom -h
 usage: igdc.py custom [-h] [-iargs INPUT_ARGS] method_name
